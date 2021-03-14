@@ -122,7 +122,7 @@ struct ParsedInternalKey {
 
   void SetTimestamp(const Slice& ts) {
     assert(ts.size() <= user_key.size());
-    const char* addr = user_key.data() - ts.size();
+    const char* addr = user_key.data() + user_key.size() - ts.size();
     memcpy(const_cast<char*>(addr), ts.data(), ts.size());
   }
 };
@@ -146,8 +146,10 @@ inline void UnPackSequenceAndType(uint64_t packed, uint64_t* seq,
   *seq = packed >> 8;
   *t = static_cast<ValueType>(packed & 0xff);
 
-  assert(*seq <= kMaxSequenceNumber);
-  assert(IsExtendedValueType(*t));
+  // Commented the following two assertions in order to test key-value checksum
+  // on corrupted keys without crashing ("DbKvChecksumTest").
+  // assert(*seq <= kMaxSequenceNumber);
+  // assert(IsExtendedValueType(*t));
 }
 
 EntryType GetEntryType(ValueType value_type);
@@ -510,6 +512,7 @@ class IterKey {
 
   bool IsKeyPinned() const { return (key_ != buf_); }
 
+  // user_key does not have timestamp.
   void SetInternalKey(const Slice& key_prefix, const Slice& user_key,
                       SequenceNumber s,
                       ValueType value_type = kValueTypeForSeek,

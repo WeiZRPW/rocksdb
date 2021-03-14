@@ -160,10 +160,9 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
     RecordTick(stats_, WRITE_WITH_WAL);
   }
 
-  StopWatch write_sw(env_, immutable_db_options_.statistics.get(), DB_WRITE);
+  StopWatch write_sw(clock_, immutable_db_options_.statistics.get(), DB_WRITE);
 
   write_thread_.JoinBatchGroup(&w);
-  Status status;
   if (w.state == WriteThread::STATE_PARALLEL_MEMTABLE_WRITER) {
     // we are a non-leader in a parallel group
 
@@ -193,8 +192,6 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
     }
     assert(w.state == WriteThread::STATE_COMPLETED);
     // STATE_COMPLETED conditional below handles exit
-
-    status = w.FinalStatus();
   }
   if (w.state == WriteThread::STATE_COMPLETED) {
     if (log_used != nullptr) {
@@ -204,13 +201,11 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
       *seq_used = w.sequence;
     }
     // write is complete and leader has updated sequence
-    // Should we handle it?
-    status.PermitUncheckedError();
     return w.FinalStatus();
   }
   // else we are the leader of the write batch group
   assert(w.state == WriteThread::STATE_GROUP_LEADER);
-
+  Status status;
   // Once reaches this point, the current writer "w" will try to do its write
   // job.  It may also pick up some of the remaining writers in the "writers_"
   // when it finds suitable, and finish them in the same write batch.
@@ -470,7 +465,7 @@ Status DBImpl::PipelinedWriteImpl(const WriteOptions& write_options,
                                   uint64_t* log_used, uint64_t log_ref,
                                   bool disable_memtable, uint64_t* seq_used) {
   PERF_TIMER_GUARD(write_pre_and_post_process_time);
-  StopWatch write_sw(env_, immutable_db_options_.statistics.get(), DB_WRITE);
+  StopWatch write_sw(clock_, immutable_db_options_.statistics.get(), DB_WRITE);
 
   WriteContext write_context;
 
@@ -531,6 +526,8 @@ Status DBImpl::PipelinedWriteImpl(const WriteOptions& write_options,
     PERF_TIMER_STOP(write_pre_and_post_process_time);
 
     IOStatus io_s;
+    io_s.PermitUncheckedError();  // Allow io_s to be uninitialized
+
     if (w.status.ok() && !write_options.disableWAL) {
       PERF_TIMER_GUARD(write_wal_time);
       stats->AddDBStats(InternalStats::kIntStatsWriteDoneBySelf, 1);
@@ -566,7 +563,12 @@ Status DBImpl::PipelinedWriteImpl(const WriteOptions& write_options,
     write_thread_.ExitAsBatchGroupLeader(wal_write_group, w.status);
   }
 
+  // NOTE: the memtable_write_group is declared before the following
+  // `if` statement because its lifetime needs to be longer
+  // that the inner context  of the `if` as a reference to it
+  // may be used further below within the outer _write_thread
   WriteThread::WriteGroup memtable_write_group;
+
   if (w.state == WriteThread::STATE_MEMTABLE_WRITER_LEADER) {
     PERF_TIMER_GUARD(write_memtable_time);
     assert(w.ShouldWriteToMemtable());
@@ -583,6 +585,10 @@ Status DBImpl::PipelinedWriteImpl(const WriteOptions& write_options,
       versions_->SetLastSequence(memtable_write_group.last_sequence);
       write_thread_.ExitAsMemTableWriter(&w, memtable_write_group);
     }
+  } else {
+    // NOTE: the memtable_write_group is never really used,
+    // so we need to set its status to pass ASSERT_STATUS_CHECKED
+    memtable_write_group.status.PermitUncheckedError();
   }
 
   if (w.state == WriteThread::STATE_PARALLEL_MEMTABLE_WRITER) {
@@ -615,7 +621,7 @@ Status DBImpl::UnorderedWriteMemtable(const WriteOptions& write_options,
                                       SequenceNumber seq,
                                       const size_t sub_batch_cnt) {
   PERF_TIMER_GUARD(write_pre_and_post_process_time);
-  StopWatch write_sw(env_, immutable_db_options_.statistics.get(), DB_WRITE);
+  StopWatch write_sw(clock_, immutable_db_options_.statistics.get(), DB_WRITE);
 
   WriteThread::Writer w(write_options, my_batch, callback, log_ref,
                         false /*disable_memtable*/);
@@ -670,7 +676,7 @@ Status DBImpl::WriteImplWALOnly(
   WriteThread::Writer w(write_options, my_batch, callback, log_ref,
                         disable_memtable, sub_batch_cnt, pre_release_callback);
   RecordTick(stats_, WRITE_WITH_WAL);
-  StopWatch write_sw(env_, immutable_db_options_.statistics.get(), DB_WRITE);
+  StopWatch write_sw(clock_, immutable_db_options_.statistics.get(), DB_WRITE);
 
   write_thread->JoinBatchGroup(&w);
   assert(w.state != WriteThread::STATE_PARALLEL_MEMTABLE_WRITER);
@@ -767,6 +773,7 @@ Status DBImpl::WriteImplWALOnly(
   }
   Status status;
   IOStatus io_s;
+  io_s.PermitUncheckedError();  // Allow io_s to be uninitialized
   if (!write_options.disableWAL) {
     io_s = ConcurrentWriteToWAL(write_group, log_used, &last_sequence, seq_inc);
     status = io_s;
@@ -1086,7 +1093,7 @@ IOStatus DBImpl::WriteToWAL(const WriteThread::WriteGroup& write_group,
   }
 
   if (io_s.ok() && need_log_sync) {
-    StopWatch sw(env_, stats_, WAL_FILE_SYNC_MICROS);
+    StopWatch sw(clock_, stats_, WAL_FILE_SYNC_MICROS);
     // It's safe to access logs_ with unlocked mutex_ here because:
     //  - we've set getting_synced=true for all logs,
     //    so other threads won't pop from logs_ while we're here,
@@ -1450,8 +1457,8 @@ Status DBImpl::DelayWrite(uint64_t num_bytes,
   uint64_t time_delayed = 0;
   bool delayed = false;
   {
-    StopWatch sw(env_, stats_, WRITE_STALL, &time_delayed);
-    uint64_t delay = write_controller_.GetDelay(env_, num_bytes);
+    StopWatch sw(clock_, stats_, WRITE_STALL, &time_delayed);
+    uint64_t delay = write_controller_.GetDelay(clock_, num_bytes);
     if (delay > 0) {
       if (write_options.no_slowdown) {
         return Status::Incomplete("Write stall");
@@ -1468,14 +1475,14 @@ Status DBImpl::DelayWrite(uint64_t num_bytes,
       const uint64_t kDelayInterval = 1000;
       uint64_t stall_end = sw.start_time() + delay;
       while (write_controller_.NeedsDelay()) {
-        if (env_->NowMicros() >= stall_end) {
+        if (clock_->NowMicros() >= stall_end) {
           // We already delayed this write `delay` microseconds
           break;
         }
 
         delayed = true;
         // Sleep for 0.001 seconds
-        env_->SleepForMicroseconds(kDelayInterval);
+        clock_->SleepForMicroseconds(kDelayInterval);
       }
       mutex_.Lock();
       write_thread_.EndWriteStall();

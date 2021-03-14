@@ -52,16 +52,21 @@ enum Tag : uint32_t {
 
   kInAtomicGroup = 300,
 
+  kBlobFileAddition = 400,
+  kBlobFileGarbage,
+
   // Mask for an unidentified tag from the future which can be safely ignored.
   kTagSafeIgnoreMask = 1 << 13,
 
   // Forward compatible (aka ignorable) records
   kDbId,
-  kBlobFileAddition,
-  kBlobFileGarbage,
+  kBlobFileAddition_DEPRECATED,
+  kBlobFileGarbage_DEPRECATED,
   kWalAddition,
   kWalDeletion,
   kFullHistoryTsLow,
+  kWalAddition2,
+  kWalDeletion2,
 };
 
 enum NewFileCustomTag : uint32_t {
@@ -426,6 +431,7 @@ class VersionEdit {
   }
 
   void SetBlobFileAdditions(BlobFileAdditions blob_file_additions) {
+    assert(blob_file_additions_.empty());
     blob_file_additions_ = std::move(blob_file_additions);
   }
 
@@ -449,6 +455,7 @@ class VersionEdit {
   }
 
   void SetBlobFileGarbages(BlobFileGarbages blob_file_garbages) {
+    assert(blob_file_garbages_.empty());
     blob_file_garbages_ = std::move(blob_file_garbages);
   }
 

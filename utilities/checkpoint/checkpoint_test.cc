@@ -313,6 +313,60 @@ TEST_F(CheckpointTest, GetSnapshotLink) {
   }
 }
 
+TEST_F(CheckpointTest, CheckpointWithBlob) {
+  // Create a database with a blob file
+  Options options = CurrentOptions();
+  options.create_if_missing = true;
+  options.enable_blob_files = true;
+  options.min_blob_size = 0;
+
+  Reopen(options);
+
+  constexpr char key[] = "key";
+  constexpr char blob[] = "blob";
+
+  ASSERT_OK(Put(key, blob));
+  ASSERT_OK(Flush());
+
+  // Create a checkpoint
+  Checkpoint* checkpoint = nullptr;
+  ASSERT_OK(Checkpoint::Create(db_, &checkpoint));
+
+  std::unique_ptr<Checkpoint> checkpoint_guard(checkpoint);
+
+  ASSERT_OK(checkpoint->CreateCheckpoint(snapshot_name_));
+
+  // Make sure it contains the blob file
+  std::vector<std::string> files;
+  ASSERT_OK(env_->GetChildren(snapshot_name_, &files));
+
+  bool blob_file_found = false;
+  for (const auto& file : files) {
+    uint64_t number = 0;
+    FileType type = kWalFile;
+
+    if (ParseFileName(file, &number, &type) && type == kBlobFile) {
+      blob_file_found = true;
+      break;
+    }
+  }
+
+  ASSERT_TRUE(blob_file_found);
+
+  // Make sure the checkpoint can be opened and the blob value read
+  options.create_if_missing = false;
+  DB* checkpoint_db = nullptr;
+  ASSERT_OK(DB::Open(options, snapshot_name_, &checkpoint_db));
+
+  std::unique_ptr<DB> checkpoint_db_guard(checkpoint_db);
+
+  PinnableSlice value;
+  ASSERT_OK(checkpoint_db->Get(
+      ReadOptions(), checkpoint_db->DefaultColumnFamily(), key, &value));
+
+  ASSERT_EQ(value, blob);
+}
+
 TEST_F(CheckpointTest, ExportColumnFamilyWithLinks) {
   // Create a database
   auto options = CurrentOptions();
@@ -325,13 +379,7 @@ TEST_F(CheckpointTest, ExportColumnFamilyWithLinks) {
     ASSERT_EQ(metadata.files.size(), num_files_expected);
     std::vector<std::string> subchildren;
     ASSERT_OK(env_->GetChildren(export_path_, &subchildren));
-    int num_children = 0;
-    for (const auto& child : subchildren) {
-      if (child != "." && child != "..") {
-        ++num_children;
-      }
-    }
-    ASSERT_EQ(num_children, num_files_expected);
+    ASSERT_EQ(subchildren.size(), num_files_expected);
   };
 
   // Test DefaultColumnFamily
@@ -549,7 +597,7 @@ TEST_F(CheckpointTest, CurrentFileModifiedWhileCheckpointing) {
       {// Get past the flush in the checkpoint thread before adding any keys to
        // the db so the checkpoint thread won't hit the WriteManifest
        // syncpoints.
-       {"DBImpl::GetLiveFiles:1",
+       {"CheckpointImpl::CreateCheckpoint:FlushDone",
         "CheckpointTest::CurrentFileModifiedWhileCheckpointing:PrePut"},
        // Roll the manifest during checkpointing right after live files are
        // snapshotted.

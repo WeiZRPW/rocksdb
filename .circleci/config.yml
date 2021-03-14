@@ -62,6 +62,14 @@ commands:
           path: /tmp/test-results
       - store_artifacts: # store LOG for debugging if there's any
           path: LOG
+      - run: # on fail, compress Test Logs for diagnosing the issue
+         name: Compress Test Logs
+         command: tar -cvzf t.tar.gz t
+         when: on_fail
+      - store_artifacts: # on fail, store Test Logs for diagnosing the issue
+          path: t.tar.gz
+          destination: test_logs
+          when: on_fail
 
   install-clang-10:
     steps:
@@ -94,6 +102,13 @@ commands:
           command: |
             git clone --single-branch --branch master --depth 1 https://github.com/google/gtest-parallel.git ~/gtest-parallel
             echo 'export PATH=$HOME/gtest-parallel:$PATH' >> $BASH_ENV
+
+  install-compression-libs:
+    steps:
+      - run:
+          name: Install compression libs
+          command: |
+            sudo apt-get update -y && sudo apt-get install -y libsnappy-dev zlib1g-dev libbz2-dev liblz4-dev libzstd-dev
 
 executors:
   windows-2xlarge:
@@ -356,9 +371,13 @@ jobs:
       - run:
           name: "Setup VS"
           command: |
-            if [[ "${VS_YEAR}" == "2017" ]]; then
+            if [[ "${VS_YEAR}" == "2019" ]]; then
+              echo "VS2019 already present."
+            elif [[ "${VS_YEAR}" == "2017" ]]; then
+              echo "Installing VS2017..."
               powershell .circleci/vs2017_install.ps1
             elif [[ "${VS_YEAR}" == "2015" ]]; then
+              echo "Installing VS2015..."
               powershell .circleci/vs2015_install.ps1
             fi
       - run:
@@ -384,6 +403,7 @@ jobs:
             cd build
             ${CMAKE_BIN} -G "${CMAKE_GENERATOR}" -DCMAKE_BUILD_TYPE=Debug -DOPTDBG=1 -DPORTABLE=1 -DSNAPPY=1 -DJNI=1 << parameters.extra_cmake_opt >> ..
             cd ..
+            echo "Building with VS version: ${CMAKE_GENERATOR}"
             msbuild.exe build/rocksdb.sln -maxCpuCount -property:Configuration=Debug -property:Platform=x64
       - run:
           name: "Test RocksDB"
@@ -552,7 +572,25 @@ jobs:
             gtest-parallel $(</tmp/test_list) --output_dir=/tmp | cat  # pipe to cat to continuously output status on circleci UI. Otherwise, no status will be printed while the job is running.
       - post-steps
 
+  build-format-compatible:
+    machine:
+      image: ubuntu-1604:202007-01
+    resource_class: 2xlarge
+    steps:
+      - pre-steps
+      - install-gflags
+      - install-compression-libs
+      - run:
+          name: "test"
+          command: |
+            export TEST_TMPDIR=/dev/shm/rocksdb
+            rm -rf /dev/shm/rocksdb
+            mkdir /dev/shm/rocksdb
+            tools/check_format_compatible.sh
+      - post-steps
+
 workflows:
+  version: 2
   build-linux:
     jobs:
       - build-linux
@@ -592,23 +630,27 @@ workflows:
   build-linux-unity:
     jobs:
       - build-linux-unity
-  build-windows:
+  build-windows-vs2019:
     jobs:
-      - build-windows
+      - build-windows:
+          name: "build-windows-vs2019"
+  build-windows-vs2019-cxx20:
+    jobs:
+      - build-windows:
+          name: "build-windows-vs2019-cxx20"
+          extra_cmake_opt: -DCMAKE_CXX_STANDARD=20
   build-windows-vs2017:
     jobs:
       - build-windows:
+          name: "build-windows-vs2017"
           vs_year: "2017"
           cmake_generator: "Visual Studio 15 Win64"
   build-windows-vs2015:
     jobs:
       - build-windows:
+          name: "build-windows-vs2015"
           vs_year: "2015"
           cmake_generator: "Visual Studio 14 Win64"
-  build-windows-cxx20:
-    jobs:
-      - build-windows:
-          extra_cmake_opt: -DCMAKE_CXX_STANDARD=20
   build-java:
     jobs:
       - build-linux-java
@@ -649,3 +691,13 @@ workflows:
   build-cmake-mingw:
     jobs:
       - build-cmake-mingw
+  nightly:
+    triggers:
+      - schedule:
+          cron: "0 0 * * *"
+          filters:
+            branches:
+              only:
+                - master
+    jobs:
+      - build-format-compatible

@@ -120,7 +120,7 @@ void DBImpl::FindObsoleteFiles(JobContext* job_context, bool force,
              mutable_db_options_.delete_obsolete_files_period_micros == 0) {
     doing_the_full_scan = true;
   } else {
-    const uint64_t now_micros = env_->NowMicros();
+    const uint64_t now_micros = clock_->NowMicros();
     if ((delete_obsolete_files_last_run_ +
          mutable_db_options_.delete_obsolete_files_period_micros) <
         now_micros) {
@@ -191,7 +191,8 @@ void DBImpl::FindObsoleteFiles(JobContext* job_context, bool force,
       // set of all files in the directory. We'll exclude files that are still
       // alive in the subsequent processings.
       std::vector<std::string> files;
-      env_->GetChildren(path, &files).PermitUncheckedError();  // Ignore errors
+      Status s = env_->GetChildren(path, &files);
+      s.PermitUncheckedError();  // TODO: What should we do on error?
       for (const std::string& file : files) {
         uint64_t number;
         FileType type;
@@ -207,7 +208,8 @@ void DBImpl::FindObsoleteFiles(JobContext* job_context, bool force,
           continue;
         }
 
-        // TODO(icanadi) clean up this mess to avoid having one-off "/" prefixes
+        // TODO(icanadi) clean up this mess to avoid having one-off "/"
+        // prefixes
         job_context->full_scan_candidate_files.emplace_back("/" + file, path);
       }
     }
@@ -215,9 +217,8 @@ void DBImpl::FindObsoleteFiles(JobContext* job_context, bool force,
     // Add log files in wal_dir
     if (immutable_db_options_.wal_dir != dbname_) {
       std::vector<std::string> log_files;
-      env_->GetChildren(immutable_db_options_.wal_dir,
-                        &log_files)
-          .PermitUncheckedError();  // Ignore errors
+      Status s = env_->GetChildren(immutable_db_options_.wal_dir, &log_files);
+      s.PermitUncheckedError();  // TODO: What should we do on error?
       for (const std::string& log_file : log_files) {
         job_context->full_scan_candidate_files.emplace_back(
             log_file, immutable_db_options_.wal_dir);
@@ -227,9 +228,9 @@ void DBImpl::FindObsoleteFiles(JobContext* job_context, bool force,
     if (!immutable_db_options_.db_log_dir.empty() &&
         immutable_db_options_.db_log_dir != dbname_) {
       std::vector<std::string> info_log_files;
-      // Ignore errors
-      env_->GetChildren(immutable_db_options_.db_log_dir, &info_log_files)
-          .PermitUncheckedError();
+      Status s =
+          env_->GetChildren(immutable_db_options_.db_log_dir, &info_log_files);
+      s.PermitUncheckedError();  // TODO: What should we do on error?
       for (std::string& log_file : info_log_files) {
         job_context->full_scan_candidate_files.emplace_back(
             log_file, immutable_db_options_.db_log_dir);

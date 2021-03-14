@@ -186,6 +186,7 @@ class FileChecksumDumpCommand : public LDBCommand {
 
  private:
   std::string path_;
+  bool is_checksum_hex_;
 
   static const std::string ARG_PATH;
 };
@@ -261,7 +262,7 @@ class ReduceDBLevelsCommand : public LDBCommand {
                         const std::map<std::string, std::string>& options,
                         const std::vector<std::string>& flags);
 
-  virtual void OverrideBaseOptions() override;
+  virtual void OverrideBaseCFOptions(ColumnFamilyOptions* cf_opts) override;
 
   virtual void DoCommand() override;
 
@@ -293,7 +294,7 @@ class ChangeCompactionStyleCommand : public LDBCommand {
       const std::map<std::string, std::string>& options,
       const std::vector<std::string>& flags);
 
-  virtual void OverrideBaseOptions() override;
+  virtual void OverrideBaseCFOptions(ColumnFamilyOptions* cf_opts) override;
 
   virtual void DoCommand() override;
 
@@ -540,6 +541,7 @@ class BackupableCommand : public LDBCommand {
  protected:
   static void Help(const std::string& name, std::string& ret);
   std::string backup_env_uri_;
+  std::string backup_fs_uri_;
   std::string backup_dir_;
   int num_threads_;
   std::unique_ptr<Logger> logger_;
@@ -548,6 +550,7 @@ class BackupableCommand : public LDBCommand {
  private:
   static const std::string ARG_BACKUP_DIR;
   static const std::string ARG_BACKUP_ENV_URI;
+  static const std::string ARG_BACKUP_FS_URI;
   static const std::string ARG_NUM_THREADS;
   static const std::string ARG_STDERR_LOG_LEVEL;
 };

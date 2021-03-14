@@ -350,12 +350,17 @@ const Status& ErrorHandler::SetBGError(const Status& bg_err,
 
 // This is the main function for looking at IO related error during the
 // background operations. The main logic is:
+// 1) File scope IO error is treated as retryable IO error in the write
+//    path. In RocksDB, If a file has write IO error and it is at file scope,
+//    RocksDB never write to the same file again. RocksDB will create a new
+//    file and rewrite the whole content. Thus, it is retryable.
 // 1) if the error is caused by data loss, the error is mapped to
 //    unrecoverable error. Application/user must take action to handle
-//    this situation.
-// 2) if the error is a Retryable IO error, auto resume will be called and the
-//    auto resume can be controlled by resume count and resume interval
-//    options. There are three sub-cases:
+//    this situation (File scope case is excluded).
+// 2) if the error is a Retryable IO error (i.e., it is a file scope IO error,
+//     or its retryable flag is set and not a data loss error), auto resume
+//     will be called and the auto resume can be controlled by resume count
+//     and resume interval options. There are three sub-cases:
 //    a) if the error happens during compaction, it is mapped to a soft error.
 //       the compaction thread will reschedule a new compaction.
 //    b) if the error happens during flush and also WAL is empty, it is mapped
@@ -384,9 +389,10 @@ const Status& ErrorHandler::SetBGError(const IOStatus& bg_io_err,
 
   Status new_bg_io_err = bg_io_err;
   DBRecoverContext context;
-  if (bg_io_err.GetDataLoss()) {
-    // First, data loss is treated as unrecoverable error. So it can directly
-    // overwrite any existing bg_error_.
+  if (bg_io_err.GetScope() != IOStatus::IOErrorScope::kIOErrorScopeFile &&
+      bg_io_err.GetDataLoss()) {
+    // First, data loss (non file scope) is treated as unrecoverable error. So
+    // it can directly overwrite any existing bg_error_.
     bool auto_recovery = false;
     Status bg_err(new_bg_io_err, Status::Severity::kUnrecoverableError);
     bg_error_ = bg_err;
@@ -397,23 +403,25 @@ const Status& ErrorHandler::SetBGError(const IOStatus& bg_io_err,
                                           &bg_err, db_mutex_, &auto_recovery);
     recover_context_ = context;
     return bg_error_;
-  } else if (bg_io_err.GetRetryable()) {
-    // Second, check if the error is a retryable IO error or not. if it is
-    // retryable error and its severity is higher than bg_error_, overwrite
-    // the bg_error_ with new error.
-    // In current stage, for retryable IO error of compaction, treat it as
-    // soft error. In other cases, treat the retryable IO error as hard
-    // error.
+  } else if (bg_io_err.GetScope() ==
+                 IOStatus::IOErrorScope::kIOErrorScopeFile ||
+             bg_io_err.GetRetryable()) {
+    // Second, check if the error is a retryable IO error (file scope IO error
+    // is also treated as retryable IO error in RocksDB write path). if it is
+    // retryable error and its severity is higher than bg_error_, overwrite the
+    // bg_error_ with new error. In current stage, for retryable IO error of
+    // compaction, treat it as soft error. In other cases, treat the retryable
+    // IO error as hard error.
     bool auto_recovery = false;
     EventHelpers::NotifyOnBackgroundError(db_options_.listeners, reason,
                                           &new_bg_io_err, db_mutex_,
                                           &auto_recovery);
     if (BackgroundErrorReason::kCompaction == reason) {
-      Status bg_err(new_bg_io_err, Status::Severity::kSoftError);
-      if (bg_err.severity() > bg_error_.severity()) {
-        bg_error_ = bg_err;
-      }
-      recover_context_ = context;
+      // We map the retryable IO error during compaction to soft error. Since
+      // compaction can reschedule by itself. We will not set the BG error in
+      // this case
+      // TODO:  a better way to set or clean the retryable IO error which
+      // happens during compaction SST file write.
       return bg_error_;
     } else if (BackgroundErrorReason::kFlushNoWAL == reason ||
                BackgroundErrorReason::kManifestWriteNoWAL == reason) {
@@ -662,7 +670,7 @@ void ErrorHandler::RecoverFromRetryableBGIOError() {
       // a period of time and redo auto resume if it is allowed.
       TEST_SYNC_POINT("RecoverFromRetryableBGIOError:BeforeWait0");
       TEST_SYNC_POINT("RecoverFromRetryableBGIOError:BeforeWait1");
-      int64_t wait_until = db_->env_->NowMicros() + wait_interval;
+      int64_t wait_until = db_->clock_->NowMicros() + wait_interval;
       cv_.TimedWait(wait_until);
       TEST_SYNC_POINT("RecoverFromRetryableBGIOError:AfterWait0");
     } else {

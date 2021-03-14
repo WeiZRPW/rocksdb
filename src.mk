@@ -78,6 +78,7 @@ LIB_SOURCES =                                                   \
   db/write_batch_base.cc                                        \
   db/write_controller.cc                                        \
   db/write_thread.cc                                            \
+  env/composite_env.cc                                          \
   env/env.cc                                                    \
   env/env_chroot.cc                                             \
   env/env_encryption.cc                                         \
@@ -92,6 +93,7 @@ LIB_SOURCES =                                                   \
   file/file_prefetch_buffer.cc                                  \
   file/file_util.cc                                             \
   file/filename.cc                                              \
+  file/line_file_reader.cc                                      \
   file/random_access_file_reader.cc                             \
   file/read_write_util.cc                                       \
   file/readahead_raf.cc                                         \
@@ -207,6 +209,7 @@ LIB_SOURCES =                                                   \
   util/murmurhash.cc                                            \
   util/random.cc                                                \
   util/rate_limiter.cc                                          \
+  util/ribbon_config.cc                                         \
   util/slice.cc                                                 \
   util/file_checksum_helper.cc                                  \
   util/status.cc                                                \
@@ -267,6 +270,8 @@ LIB_SOURCES =                                                   \
   utilities/transactions/lock/range/range_tree/lib/standalone_port.cc          \
   utilities/transactions/lock/range/range_tree/lib/util/dbt.cc                 \
   utilities/transactions/lock/range/range_tree/lib/util/memarena.cc            \
+  utilities/transactions/lock/range/range_tree/range_tree_lock_manager.cc      \
+  utilities/transactions/lock/range/range_tree/range_tree_lock_tracker.cc      \
   utilities/transactions/optimistic_transaction.cc              \
   utilities/transactions/optimistic_transaction_db_impl.cc      \
   utilities/transactions/pessimistic_transaction.cc             \
@@ -374,6 +379,8 @@ TEST_MAIN_SOURCES =                                                     \
   db/blob/blob_file_garbage_test.cc                                     \
   db/blob/blob_file_reader_test.cc                                      \
   db/blob/db_blob_basic_test.cc                                         \
+  db/blob/db_blob_compaction_test.cc                                    \
+  db/blob/db_blob_corruption_test.cc                                    \
   db/blob/db_blob_index_test.cc                                         \
   db/column_family_test.cc                                              \
   db/compact_files_test.cc                                              \
@@ -399,6 +406,7 @@ TEST_MAIN_SOURCES =                                                     \
   db/db_iter_test.cc                                                    \
   db/db_iter_stress_test.cc                                             \
   db/db_iterator_test.cc                                                \
+  db/db_kv_checksum_test.cc                                             \
   db/db_log_iter_test.cc                                                \
   db/db_memtable_test.cc                                                \
   db/db_merge_operator_test.cc                                          \
@@ -536,6 +544,7 @@ TEST_MAIN_SOURCES =                                                     \
   utilities/simulator_cache/sim_cache_test.cc                           \
   utilities/table_properties_collectors/compact_on_deletion_collector_test.cc  \
   utilities/transactions/optimistic_transaction_test.cc                 \
+  utilities/transactions/lock/range/range_locking_test.cc               \
   utilities/transactions/transaction_test.cc                            \
   utilities/transactions/lock/point/point_lock_manager_test.cc          \
   utilities/transactions/write_prepared_transaction_test.cc             \
